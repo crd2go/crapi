@@ -1,9 +1,9 @@
 module github.com/crd2go/crapi
 
-go 1.25.3
+go 1.25.5
 
 require (
-	github.com/crd2go/crd2go v0.0.0-20251111142436-d5d083fc9afb
+	github.com/crd2go/crd2go v0.0.0-20251126083728-1b00be879b92
 	github.com/getkin/kin-openapi v0.133.0
 	github.com/stretchr/testify v1.11.1
 	k8s.io/api v0.34.2
