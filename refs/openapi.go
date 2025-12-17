@@ -17,7 +17,7 @@ package refs
 import (
 	"strings"
 
-	"github.com/crd2go/crapi/unstructured"
+	"github.com/crd2go/crapi/objmap"
 )
 
 type OpenAPIMapping struct {
@@ -31,7 +31,7 @@ func (oam OpenAPIMapping) targetPath() []string {
 
 func resolveXPath(xpath string) []string {
 	if strings.HasPrefix(xpath, "$.") {
-		return unstructured.AsPath(xpath[1:])
+		return objmap.AsPath(xpath[1:])
 	}
-	return unstructured.AsPath(xpath)
+	return objmap.AsPath(xpath)
 }
