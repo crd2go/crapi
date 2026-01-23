@@ -22,8 +22,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	v1 "github.com/crd2go/crapi/testdata/samples/v1"
 	"github.com/crd2go/crapi/internal/pointer"
+	v1 "github.com/crd2go/crapi/testdata/samples/v1"
 )
 
 func TestIsNil(t *testing.T) {

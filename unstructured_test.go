@@ -28,9 +28,9 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/crd2go/crapi/internal/pointer"
 	"github.com/crd2go/crapi"
 	"github.com/crd2go/crapi/testdata"
-	"github.com/crd2go/crapi/internal/pointer"
 )
 
 //nolint:dupl

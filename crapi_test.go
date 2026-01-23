@@ -32,11 +32,11 @@ import (
 	k8sscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/crd2go/crapi/internal/pointer"
 	"github.com/crd2go/crapi"
 	"github.com/crd2go/crapi/crds"
 	"github.com/crd2go/crapi/testdata"
 	samplesv1 "github.com/crd2go/crapi/testdata/samples/v1"
-	"github.com/crd2go/crapi/internal/pointer"
 	"github.com/mongodb/mongodb-atlas-kubernetes/v2/pkg/k8s"
 )
 
