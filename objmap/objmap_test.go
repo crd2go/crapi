@@ -21,7 +21,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	admin2025 "go.mongodb.org/atlas-sdk/v20250312013/admin"
+	admin2025 "go.mongodb.org/atlas-sdk/v20250312014/admin"
 
 	"github.com/crd2go/crapi/internal/pointer"
 	"github.com/crd2go/crapi/objmap"
