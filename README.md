@@ -1,6 +1,6 @@
-# crapi
+# CRAPI
 
-`crapi` is a Go library for Kubernetes operators that need to bridge the gap between a Custom Resource (CR) and an external API.
+`CRAPI` (CR <-> API) is a Go library for Kubernetes operators that need to bridge the gap between a Custom Resource (CR) and an external API.
 
 When an operator manages resources backed by an HTTP API, it must translate the Kubernetes-shaped spec into an API request, and then map the API response back into a CR status (or a full spec+status round-trip). `crapi` makes both directions easy, including edge cases like resolving Kubernetes object references (e.g. `GroupRef`) and fetching sensitive values from Kubernetes `Secret` objects before forwarding them to the API.
 
