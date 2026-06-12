@@ -33,7 +33,6 @@ import (
 	k8sscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/crd2go/crapi/internal/pointer"
 	"github.com/crd2go/crapi"
 	"github.com/crd2go/crapi/crds"
 	"github.com/crd2go/crapi/testdata"
@@ -2053,7 +2052,7 @@ func TestFromAPIRefMapping(t *testing.T) {
 		},
 		Status: samplesv1.GroupStatus{
 			V20250312: &samplesv1.GroupStatusV20250312{
-				Id: pointer.MakePtr(groupID),
+				Id: new(groupID),
 			},
 		},
 	}
@@ -2072,7 +2071,7 @@ func TestFromAPIRefMapping(t *testing.T) {
 			apiCluster: admin2025.ClusterDescription20240805{
 				Name:        new("my-cluster"),
 				ClusterType: new("REPLICASET"),
-				GroupId:     pointer.MakePtr(groupID),
+				GroupId:     new(groupID),
 				ReplicationSpecs: &[]admin2025.ReplicationSpec20240805{
 					{
 						ZoneName: new("Zone 1"),
@@ -2112,7 +2111,7 @@ func TestFromAPIRefMapping(t *testing.T) {
 			apiCluster: admin2025.ClusterDescription20240805{
 				Name:        new("my-cluster"),
 				ClusterType: new("REPLICASET"),
-				GroupId:     pointer.MakePtr(groupID),
+				GroupId:     new(groupID),
 			},
 			targetCluster: &samplesv1.Cluster{
 				ObjectMeta: metav1.ObjectMeta{
@@ -2122,7 +2121,7 @@ func TestFromAPIRefMapping(t *testing.T) {
 			},
 			referencedObjects:    nil,
 			wantGroupRefName:     "",
-			wantGroupId:          pointer.MakePtr(groupID),
+			wantGroupId:          new(groupID),
 			wantExtraObjectCount: 0,
 		},
 	} {
