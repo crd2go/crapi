@@ -39,6 +39,43 @@ import (
 	samplesv1 "github.com/crd2go/crapi/testdata/samples/v1"
 )
 
+// stringToTimeTransformer is an example crapi.FieldTransformer, demonstrating
+// how a caller can parse a string field into a time.Time value (e.g. for use
+// with crapi.WithToAPIFieldTransformer). This mirrors the pattern crapi
+// intentionally leaves for callers to implement themselves.
+func stringToTimeTransformer(layout string) crapi.FieldTransformer {
+	return func(_ string, value any) (any, error) {
+		s, ok := value.(string)
+		if !ok {
+			return nil, crapi.ErrNoMatch
+		}
+		t, err := time.Parse(layout, s)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse time value %q using layout %q: %w", s, layout, err)
+		}
+		return t, nil
+	}
+}
+
+// timeToStringTransformer is an example crapi.FieldTransformer, demonstrating
+// how a caller can normalize a time-valued string field back to a stable
+// canonical string (e.g. for use with crapi.WithFromAPIFieldTransformer).
+// This mirrors the pattern crapi intentionally leaves for callers to
+// implement themselves.
+func timeToStringTransformer(layout string) crapi.FieldTransformer {
+	return func(_ string, value any) (any, error) {
+		s, ok := value.(string)
+		if !ok {
+			return nil, crapi.ErrNoMatch
+		}
+		t, err := time.Parse(time.RFC3339, s)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse time value %q: %w", s, err)
+		}
+		return t.Format(layout), nil
+	}
+}
+
 const (
 	version = "v1"
 
@@ -205,6 +242,172 @@ func TestFromAPI(t *testing.T) {
 					},
 				}
 				testFromAPI(t, "DatabaseUser", &target, &input, want, wantSecret)
+			},
+		},
+
+		{
+			name: "dbuser deleteAfterDate with non-canonical RFC3339 variant and field transformers",
+			test: func(t *testing.T) {
+				// FromAPI direction: SDK *time.Time -> CRD *string
+				// With StringToTime transformer, the SDK time.Time becomes CRD string
+				input := admin2025.CloudDatabaseUser{
+					AwsIAMType:      new("NONE AWS"),
+					DatabaseName:    "dbname",
+					DeleteAfterDate: new(time.Date(2025, 2, 1, 1, 30, 15, 0, time.UTC)),
+					Description:     new("sample db user"),
+					GroupId:         testProjectID,
+					Labels: &[]admin2025.ComponentLabel{
+						{Key: new("key0"), Value: new("value0")},
+					},
+					LdapAuthType: new("NONE LDAP"),
+					OidcAuthType: new("NONE OIDC"),
+					Password:     new("fakepass"),
+					Roles: []admin2025.DatabaseUserRole{
+						{CollectionName: new("collection0"), DatabaseName: "mydb", RoleName: "admin"},
+					},
+					Scopes: &[]admin2025.UserScope{
+						{Name: "scopeName", Type: "scopeType"},
+					},
+					Username: "dbuser",
+					X509Type: new("NONE X509"),
+				}
+				target := samplesv1.DatabaseUser{}
+				want := &samplesv1.DatabaseUser{
+					Spec: samplesv1.DatabaseUserSpec{
+						V20250312: &samplesv1.DatabaseUserSpecV20250312{
+							Entry: &samplesv1.DatabaseUserSpecV20250312Entry{
+								AwsIAMType:      new("NONE AWS"),
+								DatabaseName:    "dbname",
+								DeleteAfterDate: new("2025-02-01T01:30:15Z"),
+								Description:     new("sample db user"),
+								Labels: &[]samplesv1.Tags{
+									{Key: "key0", Value: "value0"},
+								},
+								LdapAuthType: new("NONE LDAP"),
+								OidcAuthType: new("NONE OIDC"),
+								PasswordSecretRef: &samplesv1.PasswordSecretRef{
+									Key:  new("password"),
+									Name: "-6cb55bffddcfffc5d4c",
+								},
+								Roles: &[]samplesv1.Roles{
+									{CollectionName: new("collection0"), DatabaseName: "mydb", RoleName: "admin"},
+								},
+								Scopes: &[]samplesv1.Scopes{
+									{Name: "scopeName", Type: "scopeType"},
+								},
+								Username: "dbuser",
+								X509Type: new("NONE X509"),
+							},
+							GroupId: new(testProjectID),
+						},
+					},
+				}
+				wantSecret := &corev1.Secret{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "-6cb55bffddcfffc5d4c",
+					},
+					Data: map[string][]byte{
+						"password": []byte("fakepass"),
+					},
+				}
+				scheme := testScheme(t)
+				crdsYML := bytes.NewBuffer(testdata.SampleCRDs)
+				crd, err := extractCRD("DatabaseUser", bufio.NewScanner(crdsYML))
+				require.NoError(t, err)
+				tr, err := crapi.NewTranslator(scheme, crd, version, sdkVersion,
+					crapi.WithFromAPIFieldTransformer("deleteAfterDate", timeToStringTransformer(time.RFC3339)),
+				)
+				require.NoError(t, err)
+				results, err := tr.FromAPI(&target, &input)
+				require.NoError(t, err)
+				assert.Equal(t, want, &target)
+				assert.Equal(t, []client.Object{wantSecret}, results)
+			},
+		},
+
+		{
+			name: "dbuser deleteAfterDate FromAPI normalization with TimeToString",
+			test: func(t *testing.T) {
+				// Demonstrates the normalization benefit of TimeToString:
+				// The SDK time.Time with fractional seconds goes through JSON
+				// marshal (RFC3339Nano: "2025-02-01T01:30:15.5Z") and is then
+				// normalized by TimeToString(time.RFC3339) to "2025-02-01T01:30:15Z"
+				// (without fractional seconds).
+				input := admin2025.CloudDatabaseUser{
+					AwsIAMType:      new("NONE AWS"),
+					DatabaseName:    "dbname",
+					DeleteAfterDate: new(time.Date(2025, 2, 1, 1, 30, 15, 500*1000*1000, time.UTC)),
+					Description:     new("sample db user"),
+					GroupId:         testProjectID,
+					Labels: &[]admin2025.ComponentLabel{
+						{Key: new("key0"), Value: new("value0")},
+					},
+					LdapAuthType: new("NONE LDAP"),
+					OidcAuthType: new("NONE OIDC"),
+					Password:     new("fakepass"),
+					Roles: []admin2025.DatabaseUserRole{
+						{CollectionName: new("collection0"), DatabaseName: "mydb", RoleName: "admin"},
+					},
+					Scopes: &[]admin2025.UserScope{
+						{Name: "scopeName", Type: "scopeType"},
+					},
+					Username: "dbuser",
+					X509Type: new("NONE X509"),
+				}
+				target := samplesv1.DatabaseUser{}
+				// With TimeToString(time.RFC3339), the fractional seconds are
+				// stripped, producing "2025-02-01T01:30:15Z" instead of the
+				// default RFC3339Nano "2025-02-01T01:30:15.5Z".
+				want := &samplesv1.DatabaseUser{
+					Spec: samplesv1.DatabaseUserSpec{
+						V20250312: &samplesv1.DatabaseUserSpecV20250312{
+							Entry: &samplesv1.DatabaseUserSpecV20250312Entry{
+								AwsIAMType:      new("NONE AWS"),
+								DatabaseName:    "dbname",
+								DeleteAfterDate: new("2025-02-01T01:30:15Z"),
+								Description:     new("sample db user"),
+								Labels: &[]samplesv1.Tags{
+									{Key: "key0", Value: "value0"},
+								},
+								LdapAuthType: new("NONE LDAP"),
+								OidcAuthType: new("NONE OIDC"),
+								PasswordSecretRef: &samplesv1.PasswordSecretRef{
+									Key:  new("password"),
+									Name: "-6cb55bffddcfffc5d4c",
+								},
+								Roles: &[]samplesv1.Roles{
+									{CollectionName: new("collection0"), DatabaseName: "mydb", RoleName: "admin"},
+								},
+								Scopes: &[]samplesv1.Scopes{
+									{Name: "scopeName", Type: "scopeType"},
+								},
+								Username: "dbuser",
+								X509Type: new("NONE X509"),
+							},
+							GroupId: new(testProjectID),
+						},
+					},
+				}
+				wantSecret := &corev1.Secret{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "-6cb55bffddcfffc5d4c",
+					},
+					Data: map[string][]byte{
+						"password": []byte("fakepass"),
+					},
+				}
+				scheme := testScheme(t)
+				crdsYML := bytes.NewBuffer(testdata.SampleCRDs)
+				crd, err := extractCRD("DatabaseUser", bufio.NewScanner(crdsYML))
+				require.NoError(t, err)
+				tr, err := crapi.NewTranslator(scheme, crd, version, sdkVersion,
+					crapi.WithFromAPIFieldTransformer("deleteAfterDate", timeToStringTransformer(time.RFC3339)),
+				)
+				require.NoError(t, err)
+				results, err := tr.FromAPI(&target, &input)
+				require.NoError(t, err)
+				assert.Equal(t, want, &target)
+				assert.Equal(t, []client.Object{wantSecret}, results)
 			},
 		},
 
@@ -1396,6 +1599,218 @@ func TestToAPI(t *testing.T) {
 		},
 
 		{
+			name: "dbuser deleteAfterDate ToAPI with RFC3339 non-canonical offset and field transformers",
+			test: func(t *testing.T) {
+				// ToAPI direction: CRD *string -> SDK *time.Time
+				// CRD has deleteAfterDate with +00:00 offset (non-canonical variant)
+				// With StringToTime(time.RFC3339) registered, this should parse correctly.
+				input := &samplesv1.DatabaseUser{
+					ObjectMeta: metav1.ObjectMeta{
+						Namespace: "ns",
+					},
+					Spec: samplesv1.DatabaseUserSpec{
+						V20250312: &samplesv1.DatabaseUserSpecV20250312{
+							Entry: &samplesv1.DatabaseUserSpecV20250312Entry{
+								Username:          "test-user",
+								DatabaseName:      "admin",
+								Roles:             &[]samplesv1.Roles{{DatabaseName: "admin", RoleName: "readWrite"}},
+								AwsIAMType:        new("aws-iam-type"),
+								DeleteAfterDate:   new("2025-02-01T01:30:15+00:00"),
+								Description:       new("description"),
+								Labels:            &[]samplesv1.Tags{{Key: "key-1", Value: "value-1"}},
+								LdapAuthType:      new("ldap-auth-type"),
+								OidcAuthType:      new("oidc-auth-type"),
+								PasswordSecretRef: &samplesv1.PasswordSecretRef{Name: "password-secret", Key: new("password")},
+								Scopes:            &[]samplesv1.Scopes{{Name: "scope-1", Type: "type-1"}},
+								X509Type:          new("x509-type"),
+							},
+							GroupId: new("32b6e34b3d91647abb20e7b8"),
+						},
+					},
+				}
+				target := &admin2025.CloudDatabaseUser{}
+				want := &admin2025.CloudDatabaseUser{
+					Username:        "test-user",
+					DatabaseName:    "admin",
+					GroupId:         "32b6e34b3d91647abb20e7b8",
+					Roles:           []admin2025.DatabaseUserRole{{DatabaseName: "admin", RoleName: "readWrite"}},
+					AwsIAMType:      new("aws-iam-type"),
+					DeleteAfterDate: new(time.Date(2025, 2, 1, 1, 30, 15, 0, time.UTC)),
+					Description:     new("description"),
+					Labels:          &[]admin2025.ComponentLabel{{Key: new("key-1"), Value: new("value-1")}},
+					LdapAuthType:    new("ldap-auth-type"),
+					OidcAuthType:    new("oidc-auth-type"),
+					Password:        new("sample-password"),
+					Scopes:          &[]admin2025.UserScope{{Name: "scope-1", Type: "type-1"}},
+					X509Type:        new("x509-type"),
+				}
+				objs := []client.Object{
+					&corev1.Secret{
+						TypeMeta:   metav1.TypeMeta{Kind: "Secret", APIVersion: "v1"},
+						ObjectMeta: metav1.ObjectMeta{Name: "password-secret", Namespace: "ns"},
+						Data:       map[string][]byte{"password": ([]byte)("sample-password")},
+					},
+				}
+				scheme := testScheme(t)
+				crdsYML := bytes.NewBuffer(testdata.SampleCRDs)
+				crd, err := extractCRD("DatabaseUser", bufio.NewScanner(crdsYML))
+				require.NoError(t, err)
+				trs, err := crapi.NewPerVersionTranslators(scheme, crd, version, []string{sdkVersion},
+					crapi.WithToAPIFieldTransformer("deleteAfterDate", stringToTimeTransformer(time.RFC3339)),
+				)
+				require.NoError(t, err)
+				tr := trs[sdkVersion]
+				require.NotNil(t, tr)
+				require.NoError(t, tr.ToAPI(target, input, objs...))
+				assert.Equal(t, want, target)
+			},
+		},
+
+		{
+			name: "dbuser deleteAfterDate ToAPI with millisecond precision offset and transformers",
+			test: func(t *testing.T) {
+				// ToAPI direction with millisecond-precision RFC3339 input and +00:00 offset.
+				// Also tests FromAPI TimeToString normalization: the SDK *time.Time becomes
+				// a canonical RFC3339 string even though the CRD input had a non-Z offset.
+				input := &samplesv1.DatabaseUser{
+					ObjectMeta: metav1.ObjectMeta{
+						Namespace: "ns",
+					},
+					Spec: samplesv1.DatabaseUserSpec{
+						V20250312: &samplesv1.DatabaseUserSpecV20250312{
+							Entry: &samplesv1.DatabaseUserSpecV20250312Entry{
+								Username:          "test-user",
+								DatabaseName:      "admin",
+								Roles:             &[]samplesv1.Roles{{DatabaseName: "admin", RoleName: "readWrite"}},
+								AwsIAMType:        new("aws-iam-type"),
+								DeleteAfterDate:   new("2025-02-01T01:30:15.500+00:00"),
+								Description:       new("description"),
+								Labels:            &[]samplesv1.Tags{{Key: "key-1", Value: "value-1"}},
+								LdapAuthType:      new("ldap-auth-type"),
+								OidcAuthType:      new("oidc-auth-type"),
+								PasswordSecretRef: &samplesv1.PasswordSecretRef{Name: "password-secret", Key: new("password")},
+								Scopes:            &[]samplesv1.Scopes{{Name: "scope-1", Type: "type-1"}},
+								X509Type:          new("x509-type"),
+							},
+							GroupId: new("32b6e34b3d91647abb20e7b8"),
+						},
+					},
+				}
+				target := &admin2025.CloudDatabaseUser{}
+				want := &admin2025.CloudDatabaseUser{
+					Username:        "test-user",
+					DatabaseName:    "admin",
+					GroupId:         "32b6e34b3d91647abb20e7b8",
+					Roles:           []admin2025.DatabaseUserRole{{DatabaseName: "admin", RoleName: "readWrite"}},
+					AwsIAMType:      new("aws-iam-type"),
+					DeleteAfterDate: new(time.Date(2025, 2, 1, 1, 30, 15, 500*1000*1000, time.UTC)),
+					Description:     new("description"),
+					Labels:          &[]admin2025.ComponentLabel{{Key: new("key-1"), Value: new("value-1")}},
+					LdapAuthType:    new("ldap-auth-type"),
+					OidcAuthType:    new("oidc-auth-type"),
+					Password:        new("sample-password"),
+					Scopes:          &[]admin2025.UserScope{{Name: "scope-1", Type: "type-1"}},
+					X509Type:        new("x509-type"),
+				}
+				objs := []client.Object{
+					&corev1.Secret{
+						TypeMeta:   metav1.TypeMeta{Kind: "Secret", APIVersion: "v1"},
+						ObjectMeta: metav1.ObjectMeta{Name: "password-secret", Namespace: "ns"},
+						Data:       map[string][]byte{"password": ([]byte)("sample-password")},
+					},
+				}
+				scheme := testScheme(t)
+				crdsYML := bytes.NewBuffer(testdata.SampleCRDs)
+				crd, err := extractCRD("DatabaseUser", bufio.NewScanner(crdsYML))
+				require.NoError(t, err)
+				trs, err := crapi.NewPerVersionTranslators(scheme, crd, version, []string{sdkVersion},
+					crapi.WithToAPIFieldTransformer("deleteAfterDate", stringToTimeTransformer(time.RFC3339)),
+				)
+				require.NoError(t, err)
+				tr := trs[sdkVersion]
+				require.NotNil(t, tr)
+				require.NoError(t, tr.ToAPI(target, input, objs...))
+				assert.Equal(t, want, target)
+			},
+		},
+
+		{
+			name: "dbuser deleteAfterDate ToAPI without transformers (default path +00:00 location behavior)",
+			test: func(t *testing.T) {
+				// Documents the default path (no StringToTime transformer) behavior
+				// when the CRD has a non-canonical "+00:00" offset. Go's time.Time
+				// JSON unmarshal correctly parses the instant, but the resulting
+				// time.Location is an empty-named UTC-offset location rather than
+				// time.UTC. This causes assert.Equal on the whole struct to fail
+				// even though t.Equal() would succeed. The StringToTime transformer
+				// (tested in the previous cases) avoids this by using time.Parse
+				// with time.RFC3339 directly.
+				input := &samplesv1.DatabaseUser{
+					ObjectMeta: metav1.ObjectMeta{
+						Namespace: "ns",
+					},
+					Spec: samplesv1.DatabaseUserSpec{
+						V20250312: &samplesv1.DatabaseUserSpecV20250312{
+							Entry: &samplesv1.DatabaseUserSpecV20250312Entry{
+								Username:          "test-user",
+								DatabaseName:      "admin",
+								Roles:             &[]samplesv1.Roles{{DatabaseName: "admin", RoleName: "readWrite"}},
+								AwsIAMType:        new("aws-iam-type"),
+								DeleteAfterDate:   new("2025-02-01T01:30:15+00:00"),
+								Description:       new("description"),
+								Labels:            &[]samplesv1.Tags{{Key: "key-1", Value: "value-1"}},
+								LdapAuthType:      new("ldap-auth-type"),
+								OidcAuthType:      new("oidc-auth-type"),
+								PasswordSecretRef: &samplesv1.PasswordSecretRef{Name: "password-secret", Key: new("password")},
+								Scopes:            &[]samplesv1.Scopes{{Name: "scope-1", Type: "type-1"}},
+								X509Type:          new("x509-type"),
+							},
+							GroupId: new("32b6e34b3d91647abb20e7b8"),
+						},
+					},
+				}
+				target := &admin2025.CloudDatabaseUser{}
+				objs := []client.Object{
+					&corev1.Secret{
+						TypeMeta:   metav1.TypeMeta{Kind: "Secret", APIVersion: "v1"},
+						ObjectMeta: metav1.ObjectMeta{Name: "password-secret", Namespace: "ns"},
+						Data:       map[string][]byte{"password": ([]byte)("sample-password")},
+					},
+				}
+				// Uses the default testToAPI-style setup (no options), which exercises
+				// the default translator path without any field transformers.
+				scheme := testScheme(t)
+				crdsYML := bytes.NewBuffer(testdata.SampleCRDs)
+				crd, err := extractCRD("DatabaseUser", bufio.NewScanner(crdsYML))
+				require.NoError(t, err)
+				trs, err := crapi.NewPerVersionTranslators(scheme, crd, version, []string{sdkVersion})
+				require.NoError(t, err)
+				tr := trs[sdkVersion]
+				require.NotNil(t, tr)
+				require.NoError(t, tr.ToAPI(target, input, objs...))
+
+				// The instant is correctly parsed despite the non-canonical offset
+				require.NotNil(t, target.DeleteAfterDate)
+				assert.True(t, target.DeleteAfterDate.Equal(time.Date(2025, 2, 1, 1, 30, 15, 0, time.UTC)),
+					"the instant should be correct with .Equal()")
+
+				// Note: we intentionally do not assert on target.DeleteAfterDate.Location()
+				// here. Go's time.Parse assigns time.Local (name "Local") when a parsed
+				// numeric offset like "+00:00" happens to match the process's local
+				// timezone offset, or an anonymous fixed zone (name "") otherwise — this
+				// is inherently dependent on the host machine/CI runner's timezone and is
+				// not something application code controls, so it's not meaningful to
+				// assert on. What matters is the instant in time is correct, which we do
+				// assert via .Equal() above.
+
+				// Verify other fields are correct despite the time location quirk
+				assert.Equal(t, "test-user", target.Username)
+				assert.Equal(t, "admin", target.DatabaseName)
+				assert.Equal(t, "32b6e34b3d91647abb20e7b8", target.GroupId)
+			},
+		},
+
+		{
 			name: "flex cluster with all fields",
 			test: func(t *testing.T) {
 				input := &samplesv1.FlexCluster{
@@ -2016,7 +2431,7 @@ func testToAPI[T any](t *testing.T, kind string, input client.Object, objs []cli
 	crdsYML := bytes.NewBuffer(testdata.SampleCRDs)
 	crd, err := extractCRD(kind, bufio.NewScanner(crdsYML))
 	require.NoError(t, err)
-	trs, err := crapi.NewPerVersionTranslators(testScheme(t), crd, version, sdkVersion)
+	trs, err := crapi.NewPerVersionTranslators(testScheme(t), crd, version, []string{sdkVersion})
 	require.NoError(t, err)
 	tr := trs[sdkVersion]
 	require.NotNil(t, tr)

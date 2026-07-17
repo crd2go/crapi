@@ -22,7 +22,14 @@ type Translator interface {
 }
 ```
 
-Create a `Translator` with `NewTranslator` (single API version) or `NewPerVersionTranslators` (multiple versions indexed by SDK major version).
+Create a `Translator` with `NewTranslator` (single API version) or `NewPerVersionTranslators` (multiple versions indexed by SDK major version). Both accept optional trailing `TranslatorOption`s (see [Field-level transformers](#field-level-transformers) below).
+
+> **Breaking change:** `NewPerVersionTranslators`'s `versions` parameter is a `[]string` (previously a variadic `...string`), to make room for the new trailing `opts ...TranslatorOption` parameter. Existing callers must update:
+> ```diff
+> - NewPerVersionTranslators(scheme, crd, "v1", "v20250312", "v20250810")
+> + NewPerVersionTranslators(scheme, crd, "v1", []string{"v20250312", "v20250810"})
+> ```
+> `NewTranslator` is unaffected and remains fully backwards compatible.
 
 ## Example
 
@@ -127,6 +134,63 @@ err := tr.ToAPI(&req, cr, deps...)
 // req.GroupId           == "62b6e34b3d91647abb20e7b8"  (resolved from GroupRef)
 // req.Notifications[0].DatadogApiKey == "dd-api-key-value"  (resolved from Secret)
 ```
+
+### Field-level transformers
+
+By default, translation works via a JSON round-trip through `map[string]any`. This works well when the CRD and SDK field types share a compatible JSON representation, but can produce unstable results when they don't — for example, a CRD stores `DeleteAfterDate` as `*string` (RFC3339 text) while the SDK expects `*time.Time`. Without transformers, the JSON round-trip may parse the string into a `time.Time` with a non-canonical format, causing spurious diffs on every reconciliation cycle.
+
+Field-level transformers give you fine-grained control over how individual fields are converted. Register them via `WithToAPIFieldTransformer` and `WithFromAPIFieldTransformer` when constructing the translator.
+
+**Without transformers:**
+
+```go
+tr, err := crapi.NewTranslator(scheme, crd, "v1", "v20250312")
+// The default JSON round-trip will deserialize "deleteAfterDate"
+// into *time.Time via time.UnmarshalJSON, but the result may use a
+// non-canonical format, triggering unnecessary spec updates.
+```
+
+**With transformers:**
+
+```go
+// stringToTime parses a string RFC3339 value into time.Time for the SDK.
+func stringToTime(layout string) crapi.FieldTransformer {
+    return func(_ string, value any) (any, error) {
+        s, ok := value.(string)
+        if !ok {
+            return nil, crapi.ErrNoMatch
+        }
+        t, err := time.Parse(layout, s)
+        if err != nil {
+            return nil, fmt.Errorf("parse time: %w", err)
+        }
+        return t, nil
+    }
+}
+
+// timeToString normalizes a time-valued string field to a canonical string.
+func timeToString(layout string) crapi.FieldTransformer {
+    return func(_ string, value any) (any, error) {
+        s, ok := value.(string)
+        if !ok {
+            return nil, crapi.ErrNoMatch
+        }
+        t, err := time.Parse(time.RFC3339, s)
+        if err != nil {
+            return nil, fmt.Errorf("parse time: %w", err)
+        }
+        return t.Format(layout), nil
+    }
+}
+
+tr, err := crapi.NewTranslator(
+    scheme, crd, "v1", "v20250312",
+    crapi.WithToAPIFieldTransformer("deleteAfterDate", stringToTime(time.RFC3339)),
+    crapi.WithFromAPIFieldTransformer("deleteAfterDate", timeToString(time.RFC3339)),
+)
+```
+
+Returning `crapi.ErrNoMatch` from a transformer signals that it does not apply to the given value, allowing the next registered transformer to try (or leaving the value unchanged if none match). Transformers are matched by an anchored regular expression against the field's dotted path — `"deleteAfterDate"` matches the top-level field, `"nested\\.deleteAfterDate"` matches a field inside a nested object, and `"items\\[\\]\\.deleteAfterDate"` matches fields inside array elements.
 
 ## License
 
