@@ -1,6 +1,6 @@
 module github.com/crd2go/crapi
 
-go 1.26.4
+go 1.26.5
 
 require (
 	github.com/crd2go/crd2go v0.0.0-20251126083728-1b00be879b92
