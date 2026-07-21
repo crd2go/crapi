@@ -45,7 +45,7 @@ import (
 //	  v20250312:
 //
 // In the above case crdVersion is "v1" and majorVersion is "v20250312".
-func NewTranslator(scheme *runtime.Scheme, crd *apiextensionsv1.CustomResourceDefinition, crdVersion string, majorVersion string) (Translator, error) {
+func NewTranslator(scheme *runtime.Scheme, crd *apiextensionsv1.CustomResourceDefinition, crdVersion string, majorVersion string, opts ...TranslatorOption) (Translator, error) {
 	specVersion := crds.SelectVersion(&crd.Spec, crdVersion)
 	if err := crds.AssertMajorVersion(specVersion, crd.Spec.Names.Kind, majorVersion); err != nil {
 		return nil, fmt.Errorf("failed to assert major version %s in CRD: %w", majorVersion, err)
@@ -62,30 +62,34 @@ func NewTranslator(scheme *runtime.Scheme, crd *apiextensionsv1.CustomResourceDe
 		}
 	}
 
-	return &translator{
+	tr := &translator{
 		scheme:        scheme,
 		majorVersion:  majorVersion,
 		gvk:           schema.GroupVersionKind{Group: crd.Spec.Group, Version: crdVersion, Kind: crd.Spec.Names.Kind},
 		mappingSchema: &openapi3.SchemaRef{Value: &mappingSchema},
-	}, nil
+	}
+	for _, opt := range opts {
+		opt(tr)
+	}
+	return tr, nil
 }
 
-// NewPerVersionTranslators creates a set of translators indexed by SDK versions
+// NewPerVersionTranslators creates a set of translators indexed by SDK versions.
 //
 // Given the following example resource:
 //
-//		apiVersion: atlas.generated.mongodb.com/v1
-//		kind: SearchIndex
-//		metadata:
-//		  name: search-index
-//		spec:
-//		  v20250312:
+//	apiVersion: atlas.generated.mongodb.com/v1
+//	kind: SearchIndex
+//	metadata:
+//	  name: search-index
+//	spec:
+//	  v20250312:
 //	    ...
-//		  v20250810:
+//	  v20250810:
 //
-// In the above case crdVersion is "v1" and versions can be "v20250312"
-// and/or "v20250810".
-func NewPerVersionTranslators(scheme *runtime.Scheme, crd *apiextensionsv1.CustomResourceDefinition, crdVersion string, versions ...string) (map[string]Translator, error) {
+// In the above case crdVersion is "v1" and versions is ["v20250312", "v20250810"].
+// Optional opts ...TranslatorOption are applied to each translator created.
+func NewPerVersionTranslators(scheme *runtime.Scheme, crd *apiextensionsv1.CustomResourceDefinition, crdVersion string, versions []string, opts ...TranslatorOption) (map[string]Translator, error) {
 	translators := map[string]Translator{}
 	specVersion := crds.SelectVersion(&crd.Spec, crdVersion)
 	for _, version := range versions {
@@ -104,12 +108,16 @@ func NewPerVersionTranslators(scheme *runtime.Scheme, crd *apiextensionsv1.Custo
 			}
 		}
 
-		translators[version] = &translator{
+		tr := &translator{
 			scheme:        scheme,
 			majorVersion:  version,
 			gvk:           schema.GroupVersionKind{Group: crd.Spec.Group, Version: crdVersion, Kind: crd.Spec.Names.Kind},
 			mappingSchema: &openapi3.SchemaRef{Value: &mappingSchema},
 		}
+		for _, opt := range opts {
+			opt(tr)
+		}
+		translators[version] = tr
 	}
 	return translators, nil
 }
@@ -117,10 +125,12 @@ func NewPerVersionTranslators(scheme *runtime.Scheme, crd *apiextensionsv1.Custo
 // translator implements Translator to translate from a given CRD to and from
 // a given SDK version using the same upstream OpenAPI schema
 type translator struct {
-	scheme        *runtime.Scheme
-	majorVersion  string
-	gvk           schema.GroupVersionKind
-	mappingSchema *openapi3.SchemaRef
+	scheme              *runtime.Scheme
+	majorVersion        string
+	gvk                 schema.GroupVersionKind
+	mappingSchema       *openapi3.SchemaRef
+	toAPITransformers   []FieldTransformer
+	fromAPITransformers []FieldTransformer
 }
 
 func (tr *translator) ToAPI(target any, source client.Object, objs ...client.Object) error {
@@ -157,6 +167,14 @@ func (tr *translator) ToAPI(target any, source client.Object, objs ...client.Obj
 	if entry, ok := rawEntry.(map[string]any); ok {
 		objmap.CopyFields(targetObjMap, entry)
 	}
+	transformed, trErr := applyFieldTransformersRecursively("", targetObjMap, tr.toAPITransformers)
+	if trErr != nil {
+		return fmt.Errorf("failed to apply field transformers: %w", trErr)
+	}
+	targetObjMap, ok := transformed.(map[string]any)
+	if !ok {
+		return fmt.Errorf("field transformers must not change the root object type, got %T", transformed)
+	}
 	if err := objmap.FromObjectMap(target, targetObjMap); err != nil {
 		return fmt.Errorf("failed to set structured value from object map: %w", err)
 	}
@@ -176,6 +194,14 @@ func (tr *translator) FromAPI(target client.Object, source any, objs ...client.O
 	sourceObjMap, err := objmap.ToObjectMap(source)
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert API source value to object map: %w", err)
+	}
+	transformedSource, tfErr := applyFieldTransformersRecursively("", sourceObjMap, tr.fromAPITransformers)
+	if tfErr != nil {
+		return nil, fmt.Errorf("failed to apply field transformers: %w", tfErr)
+	}
+	sourceObjMap, ok := transformedSource.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("field transformers must not change the root object type, got %T", transformedSource)
 	}
 
 	targetObjMap, err := objmap.ToObjectMap(target)
